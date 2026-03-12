@@ -8,18 +8,17 @@ Minesweeper automatic solver by iterative scaling with GUI visualization built i
 - Real-time probability visualization on interactive board
 - Automated game logging (outcomes, coverage stats) to CSV
 
-## Requirements
-
-- Python 3.6+
-- tkinter (usually included with Python)
-
 ## Usage
 
-Run the solver:
+The script requires Python 3.6+ and tkinter (usually included with Python). To run the solver:
 
 ```bash
 python minesweepersolver.py
 ```
+
+## Results
+
+Over 128 automated runs, the solver achieved a ~10% win rate. Successful runs accounted for 37% of the total 13,070 cells explored across all games.
 
 ## Reference
 
