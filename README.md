@@ -20,3 +20,7 @@ Run the solver:
 ```bash
 python minesweepersolver.py
 ```
+
+## Reference
+
+Mike Sheppard. A simple Minesweeper algorithm. Authoritative Minesweeper (2023). Accessed on Feb 23, 2025. https://minesweepergame.com/math/a-simple-minesweeper-algorithm-2023.pdf
