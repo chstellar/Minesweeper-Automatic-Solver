@@ -4,8 +4,8 @@ Minesweeper automatic solver by iterative scaling with GUI visualization built i
 ## Features
 
 - Iterative constraint propagation for mine probability estimation
-- Strategic solver that prioritizes certain moves over probabilistic ones
-- Real-time probability visualization on interactive board
+- Strategic solver that prioritises certain moves over probabilistic ones
+- Real-time probability visualisation on interactive board
 - Automated game logging (outcomes, coverage stats) to CSV
 
 ## Usage
@@ -18,7 +18,7 @@ python minesweepersolver.py
 
 ## Results
 
-Over 128 automated runs, the solver achieved a ~10% win rate. Successful runs accounted for 37% of the total 13,070 cells explored across all games.
+Over 128 automated runs, the solver achieved a ~10% win rate. Successful runs accounted for ~37% of the total 13,070 cells explored across all games.
 
 ## Reference
 
