@@ -5,13 +5,12 @@ import csv
 import os
 import argparse
 import copy
-from PIL import ImageGrab
 
 MASTER_SEED = 42
 THRESHOLD = 0.04
 
 class Minesweeper:
-    def __init__(self, master, rows=16, cols=30, mines=99, click_delay=0, label="", assist_mode=False):
+    def __init__(self, master, rows=16, cols=30, mines=99, click_delay=0, assist_mode=False):
         self.master = master
         self.rows = rows
         self.cols = cols
@@ -667,10 +666,9 @@ if __name__ == '__main__':
                        help='Enable assist mode (manual play with probability hints)')
     parser.add_argument('-n', '--num-games', type=int, default=None,
                        help='Number of games to play in auto mode (default: unlimited)')
-    parser.add_argument('--rows', type=int, default=16, help='Number of rows (default: 16)')
-    parser.add_argument('--cols', type=int, default=30, help='Number of columns (default: 30)')
-    parser.add_argument('--mines', type=int, default=99, help='Number of mines (default: 99)')
-    parser.add_argument('--label', type=str, default='demo', help='Label for logging (default: demo)')
+    parser.add_argument('-r', '--rows', type=int, default=16, help='Number of rows (default: 16)')
+    parser.add_argument('-c', '--cols', type=int, default=30, help='Number of columns (default: 30)')
+    parser.add_argument('-m', '--mines', type=int, default=99, help='Number of mines (default: 99)')
     parser.add_argument('--seed', type=int, default=MASTER_SEED, help=f'Master random seed (default: {MASTER_SEED})')
     parser.add_argument('--game-seed', type=int, default=None, 
                        help='Specific game seed to use (overrides -n and --seed)')
@@ -708,7 +706,6 @@ if __name__ == '__main__':
                       cols=args.cols, 
                       mines=args.mines, 
                       click_delay=0, 
-                      label=args.label,
                       assist_mode=args.assist)
     
     game.current_seed = current_seed_for_game
