@@ -37,7 +37,7 @@ python minesweepersolver.py --game-seed 12345
 
 ## Results
 
-For 100 automated test runs, the solver achieved a 33% win rate. Successful runs accounted for ~58% of the total 21,799 cells expanded across all games.
+For 105 automated runs on Expert games, the solver achieved a ~34% win rate. Successful runs accounted for ~60% of the total 22,874 cells expanded across all games. Mean time played for a game is ~6.5s and mean time to win a game is ~10.4 seconds. 
 
 ## Reference
 

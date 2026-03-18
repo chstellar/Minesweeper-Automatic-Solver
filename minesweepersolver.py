@@ -31,8 +31,6 @@ class Minesweeper:
         self.mine_emoji = "\U0001F4A3"
         self.spanning_area = 0
         self.actual_flags = 0
-        self.queued_safe = []
-        self.queued_mines = []
         self.start_time = None
         self.last_move_prob = None
         self.last_move_entropy = None
@@ -41,6 +39,7 @@ class Minesweeper:
         self.pre_lethal_state_and_probs = None
         self.current_seed = None 
         self.last_saved_file = None
+        self.virtual_flags = set()
         self._init_game()
 
     def _init_game(self):
@@ -83,30 +82,6 @@ class Minesweeper:
             r, c = divmod(pos, self.cols)
             self.grid[r][c]['mine'] = True
             self._update_neighbors(r, c)
-        
-        for r in range(self.rows):
-            for c in range(self.cols):
-                virtual_mines = 0
-                for dr in [-1, 0, 1]:
-                    for dc in [-1, 0, 1]:
-                        if dr == 0 and dc == 0:
-                            continue
-                        nr, nc = r + dr, c + dc
-                        if nr < 0 or nr >= self.rows or nc < 0 or nc >= self.cols:
-                            virtual_mines += 1
-                
-                self.grid[r][c]['virtual_count'] = self.grid[r][c]['count'] + virtual_mines
-
-    def _get_neighbors_with_virtual(self, row, col):
-        coords = []
-        for rr in range(row-1, row+2):
-            for cc in range(col-1, col+2):
-                if (rr, cc) != (row, col):
-                    coords.append((rr, cc))
-        return coords
-
-    def _is_virtual_cell(self, r, c):
-        return r < 0 or r >= self.rows or c < 0 or c >= self.cols
 
     def _update_neighbors(self, row, col):
         for rr in range(max(0, row-1), min(self.rows, row+2)):
@@ -118,16 +93,13 @@ class Minesweeper:
         if self.game_over or self.grid[r][c]['flagged']:
             return
         
-        # *** NEW: Capture state right before a lethal click ***
-        if self.grid[r][c]['mine']:
-            # This is a lethal move. Capture the state *before* it's processed.
-            # It's important to do this before the grid is modified by _reveal_recursive.
-            grid_copy = copy.deepcopy(self.grid)
-            probs_before_click = self._get_current_probabilities()
-            self.pre_lethal_state_and_probs = {
-                "grid": grid_copy,
-                "probs": probs_before_click,
-            }
+        # if self.grid[r][c]['mine']:
+        #     grid_copy = copy.deepcopy(self.grid)
+        #     probs_before_click = self._get_current_probabilities()
+        #     self.pre_lethal_state_and_probs = {
+        #         "grid": grid_copy,
+        #         "probs": probs_before_click,
+        #     }
         
         if not self.assist_mode:
             current_time = time.time()
@@ -136,6 +108,8 @@ class Minesweeper:
             self.last_click_time = current_time
         
         self._reveal_recursive(r, c)
+        # REMOVED: The expensive cache cleaning code
+        
         self.master.update_idletasks()
         
         if self.assist_mode and not self.game_over:
@@ -144,6 +118,7 @@ class Minesweeper:
     def _reveal_recursive(self, r, c):
         if self.grid[r][c]['revealed'] or self.grid[r][c]['flagged']:
             return
+        
         self.grid[r][c]['revealed'] = True
         self.spanning_area += 1
         count = self.grid[r][c]['count']
@@ -162,6 +137,7 @@ class Minesweeper:
             self._lose()
         else:
             self.non_mines -= 1
+            
             if self.grid[r][c]['count'] == 0:
                 for rr in range(max(0, r-1), min(self.rows, r+2)):
                     for cc in range(max(0, c-1), min(self.cols, c+2)):
@@ -179,7 +155,6 @@ class Minesweeper:
                 return
             self.last_click_time = current_time
         
-        was_flagged = self.grid[r][c]['flagged']
         self.grid[r][c]['flagged'] = not self.grid[r][c]['flagged']
         
         if self.grid[r][c]['flagged']:
@@ -230,15 +205,17 @@ class Minesweeper:
                             font=('Arial', 10, 'bold')
                         )
             self.master.title("You win!")
-            # *** UPDATED Call ***
             self.save_game_state("win", self.grid, probs=None)
             self.log_game_result("win")
+            # Print will be handled by check_time() before the next game
 
     def _lose(self):
+        if hasattr(self, '_loss_processed'):
+            return  # Already processing this loss
+        self._loss_processed = True
+        
         self.game_over = True
         
-        # Visualization part: Use the final grid state to show all mines.
-        # The fatal mine is highlighted in red. This remains the same.
         for r in range(self.rows):
             for c in range(self.cols):
                 if self.grid[r][c]['mine']:
@@ -257,24 +234,19 @@ class Minesweeper:
                     )
         self.master.title("Game Over")
         
-        # *** NEW: Saving logic for losses ***
         if self.spanning_area > 1:
             if self.pre_lethal_state_and_probs:
-                # If we captured a pre-lethal state, save that.
                 self.save_game_state(
                     "lose",
                     self.pre_lethal_state_and_probs["grid"],
                     self.pre_lethal_state_and_probs["probs"]
                 )
             else:
-                final_probs = self._calculate_final_probabilities()
+                final_probs = self._get_current_probabilities()
                 self.save_game_state("lose", self.grid, final_probs)
             
             self.log_game_result("lose")
         
-        if self.assist_mode:
-            self.master.after(0, self.restart_game)
-
     def _calculate_final_probabilities(self):
         """Calculate probabilities at game end for saving (used as a fallback)."""
         global_mine_density = self.initial_mines / (self.rows * self.cols)
@@ -288,187 +260,199 @@ class Minesweeper:
         return probs
 
     def save_game_state(self, outcome, grid_to_save, probs=None):
-            """Save game state to file for later rendering."""
-            try:
-                timestamp = time.strftime("%Y%m%d_%H%M%S")
-                filename = f"screenshots/{outcome}_{timestamp}_span{self.spanning_area}.txt"
+        """Save game state to file for later rendering."""
+        try:
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            filename = f"screenshots/{outcome}_{timestamp}_span{self.spanning_area}.txt"
+            
+            os.makedirs(os.path.dirname(filename), exist_ok=True)
+            
+            with open(filename, 'w') as f:
+                f.write(f"Outcome: {outcome}\n")
+                f.write(f"Spanning Area: {self.spanning_area}\n")
+                f.write(f"Rows: {self.rows}, Cols: {self.cols}, Mines: {self.initial_mines}\n")
+                f.write(f"Clicked Mine: {self.clicked_mine}\n")
+                f.write(f"Last Move Prob: {self.last_move_prob}\n")
+                f.write(f"Last Move Entropy: {self.last_move_entropy}\n")
+                f.write(f"Game Seed: {self.current_seed}\n")
+                f.write("\n")
                 
-                # Create the directory if it doesn't exist
-                os.makedirs(os.path.dirname(filename), exist_ok=True)
-                
-                with open(filename, 'w') as f:
-                    # ... (rest of the function is the same)
-                    f.write(f"Outcome: {outcome}\n")
-                    f.write(f"Spanning Area: {self.spanning_area}\n")
-                    f.write(f"Rows: {self.rows}, Cols: {self.cols}, Mines: {self.initial_mines}\n")
-                    f.write(f"Clicked Mine: {self.clicked_mine}\n")
-                    f.write(f"Last Move Prob: {self.last_move_prob}\n")
-                    f.write(f"Last Move Entropy: {self.last_move_entropy}\n")
-                    f.write(f"Game Seed: {self.current_seed}\n")
-                    f.write("\n")
-                    
-                    for r in range(self.rows):
-                        for c in range(self.cols):
-                            cell = grid_to_save[r][c]
-                            prob = -1.0
-                            if probs and (r, c) in probs:
-                                prob = probs[(r, c)]['p']
-                            
-                            f.write(f"{r},{c},{int(cell['mine'])},{int(cell['revealed'])},{int(cell['flagged'])},{cell['count']},{prob:.4f}\n")
-                
-                print(f"Game state saved: {filename}")
-                self.last_saved_file = filename
-                return filename
-            except Exception as e:
-                print(f"Failed to save game state: {e}")
-                self.last_saved_file = None
-                return None
+                for r in range(self.rows):
+                    for c in range(self.cols):
+                        cell = grid_to_save[r][c]
+                        prob = -1.0
+                        if probs and (r, c) in probs:
+                            prob = probs[(r, c)]['p']
+                        
+                        f.write(f"{r},{c},{int(cell['mine'])},{int(cell['revealed'])},{int(cell['flagged'])},{cell['count']},{prob:.4f}\n")
+            
+            print(f"Game state saved: {filename}", flush=True)  # ADD THIS BACK
+            self.last_saved_file = filename
+            return filename
+        except Exception as e:
+            print(f"Failed to save game state: {e}", flush=True)
+            self.last_saved_file = None
+            return None
 
     def calculate_and_display_probabilities(self):
-        """Calculate probabilities and display them (used in both modes)"""
-        trivial_safe = []
-        trivial_mines = []
+        """Calculate probabilities and display them (used in assist mode)"""
+        probs = self._get_current_probabilities()
         
-        for r in range(self.rows):
-            for c in range(self.cols):
-                cell = self.grid[r][c]
-                if cell['revealed'] and not cell['mine']:
-                    nbrs = self._get_neighbors(r, c)
-                    unknown = []
-                    flagged = 0
-                    for nr, nc in nbrs:
-                        if self.grid[nr][nc]['flagged']:
-                            flagged += 1
-                        elif not self.grid[nr][nc]['revealed']:
-                            unknown.append((nr, nc))
-                    
-                    remaining = cell['count'] - flagged
-                    
-                    if unknown and remaining == len(unknown):
-                        trivial_mines.extend(unknown)
-                    elif unknown and remaining == 0:
-                        trivial_safe.extend(unknown)
-        
-        trivial_safe = list(set(trivial_safe))
-        trivial_mines = list(set(trivial_mines))
-        
-        global_mine_density = self.initial_mines / (self.rows * self.cols)
-        probs = {}
-        for r in range(self.rows):
-            for c in range(self.cols):
-                cell = self.grid[r][c]
-                if not cell['revealed'] and not cell['flagged']:
-                    if (r, c) in trivial_safe:
-                        probs[(r, c)] = {'p': 0.0, 'q': 1.0}
-                    elif (r, c) in trivial_mines:
-                        probs[(r, c)] = {'p': 1.0, 'q': 0.0}
-                    else:
+        if not probs:
+            global_mine_density = self.initial_mines / (self.rows * self.cols)
+            for r in range(self.rows):
+                for c in range(self.cols):
+                    if not self.grid[r][c]['revealed'] and not self.grid[r][c]['flagged']:
                         probs[(r, c)] = {'p': global_mine_density, 'q': 1 - global_mine_density}
-
-        constraints = []
-        for r in range(self.rows):
-            for c in range(self.cols):
-                cell = self.grid[r][c]
-                if cell['revealed'] and not cell['mine']:
-                    nbrs = self._get_neighbors(r, c)
-                    unknown = []
-                    flagged = 0
-                    for nr, nc in nbrs:
-                        if self.grid[nr][nc]['flagged']:
-                            flagged += 1
-                        elif not self.grid[nr][nc]['revealed']:
-                            unknown.append((nr, nc))
-                    if unknown:
-                        remaining = cell['count'] - flagged
-                        constraints.append({'cells': unknown, 'remaining': remaining})
-        
-        if constraints:
-            max_iter = 100
-            threshold = 0.01
-            for iteration in range(max_iter):
-                max_change = 0
-                for con in constraints:
-                    cells = con['cells']
-                    rem = con['remaining']
-                    valid_cells = [cell for cell in cells if cell in probs]
-                    if not valid_cells: continue
-                    sum_p = sum(probs[cell]['p'] for cell in valid_cells)
-                    sum_q = sum(probs[cell]['q'] for cell in valid_cells)
-                    if sum_p > 1e-10:
-                        factor_p = rem / sum_p
-                        for cell in valid_cells:
-                            old = probs[cell]['p']
-                            probs[cell]['p'] *= factor_p
-                            max_change = max(max_change, abs(probs[cell]['p'] - old))
-                    if sum_q > 1e-10:
-                        factor_q = (len(valid_cells) - rem) / sum_q
-                        for cell in valid_cells:
-                            old = probs[cell]['q']
-                            probs[cell]['q'] *= factor_q
-                            max_change = max(max_change, abs(probs[cell]['q'] - old))
-                for cell in probs:
-                    p_val, q_val = probs[cell]['p'], probs[cell]['q']
-                    total = p_val + q_val
-                    if total > 1e-10:
-                        new_p, new_q = p_val / total, q_val / total
-                        max_change = max(max_change, abs(new_p - p_val), abs(new_q - q_val))
-                        probs[cell]['p'], probs[cell]['q'] = new_p, new_q
-                if max_change < threshold: break
         
         self.display_probabilities(probs)
-        return probs, trivial_safe, trivial_mines
+        return probs
 
     def _get_current_probabilities(self):
-        """Calculate probabilities using the solver's logic, without displaying."""
-        remaining_mines = self.initial_mines - self.actual_flags
-        unrevealed_count = sum(1 for r in range(self.rows) for c in range(self.cols) 
-                            if not self.grid[r][c]['revealed'] and not self.grid[r][c]['flagged'])
-        global_mine_density = remaining_mines / unrevealed_count if unrevealed_count > 0 else 0
+        """Calculate probabilities for ALL unrevealed cells using global constraints"""
         
-        probs = {}
+        # Collect ALL unrevealed cells
+        unrevealed_cells = []
         for r in range(self.rows):
             for c in range(self.cols):
                 if not self.grid[r][c]['revealed'] and not self.grid[r][c]['flagged']:
-                    probs[(r, c)] = {'p': global_mine_density, 'q': 1 - global_mine_density}
-
+                    unrevealed_cells.append((r, c))
+        
+        if not unrevealed_cells:
+            return {}
+        
+        total_virtual_flags = len(self.virtual_flags)
+        remaining_mines = self.initial_mines - self.actual_flags - total_virtual_flags
+        
+        # Count only non-virtual cells for density calculation
+        non_virtual_cells_list = [c for c in unrevealed_cells if c not in self.virtual_flags]
+        non_virtual_count = len(non_virtual_cells_list)
+        global_mine_density = remaining_mines / non_virtual_count if non_virtual_count > 0 else 0
+        
+        # WARM START: Use cached probabilities or initialize
+        probs = {}
+        for (r, c) in unrevealed_cells:
+            if (r, c) in self.virtual_flags:
+                # Virtual flags: p=1.0, locked (but NOT in constraints as unknown)
+                probs[(r, c)] = {'p': 1.0, 'q': 0.0, 'locked': True}
+            elif hasattr(self, '_cached_probs') and (r, c) in self._cached_probs:
+                # WARM START: Use previous probability
+                cached = self._cached_probs[(r, c)]
+                if 'locked' in cached and cached['locked']:
+                    probs[(r, c)] = cached.copy()
+                else:
+                    probs[(r, c)] = {'p': cached['p'], 'q': cached['q'], 'locked': False}
+            else:
+                # New cell: initialize with global density
+                probs[(r, c)] = {'p': global_mine_density, 'q': 1 - global_mine_density, 'locked': False}
+        
+        # Build constraints from ALL revealed cells
+        # CRITICAL: Virtual flags are counted as known mines, NOT in unknown list
+        # FIXED: Properly handle board boundaries - cells outside board cannot be mines
         constraints = []
         for r in range(self.rows):
             for c in range(self.cols):
                 cell = self.grid[r][c]
                 if cell['revealed'] and not cell['mine']:
-                    nbrs = self._get_neighbors_with_virtual(r, c)
-                    unknown, flagged = [], 0
-                    for nr, nc in nbrs:
-                        if self._is_virtual_cell(nr, nc) or self.grid[nr][nc]['flagged']:
-                            flagged += 1
-                        elif not self.grid[nr][nc]['revealed']:
-                            unknown.append((nr, nc))
+                    unknown = []
+                    known_mines = 0  # Actual flags + virtual flags
+                    
+                    # Check all 8 potential neighbors
+                    for dr in [-1, 0, 1]:
+                        for dc in [-1, 0, 1]:
+                            if dr == 0 and dc == 0:
+                                continue
+                            
+                            nr, nc = r + dr, c + dc
+                            
+                            # FIXED: Outside board = no mine (skip entirely, don't count)
+                            # This is the key fix - we simply skip out-of-bounds cells
+                            if nr < 0 or nr >= self.rows or nc < 0 or nc >= self.cols:
+                                continue
+                            
+                            # Count actual flags AND virtual flags as known mines
+                            if self.grid[nr][nc]['flagged'] or (nr, nc) in self.virtual_flags:
+                                known_mines += 1
+                            elif not self.grid[nr][nc]['revealed']:
+                                # ONLY include non-virtual unrevealed cells in unknown
+                                unknown.append((nr, nc))
+                    
+                    # Now the constraint correctly accounts for board boundaries:
+                    # - cell['count'] is the total mines in neighbors
+                    # - known_mines are the flags we've placed
+                    # - unknown are the cells we don't know about
+                    # - Cells outside the board are not counted anywhere (correct!)
                     if unknown:
-                        virtual_count = cell.get('virtual_count', cell['count'])
-                        remaining = virtual_count - flagged
-                        constraints.append({'cells': unknown, 'remaining': remaining})
+                        remaining_mines_here = cell['count'] - known_mines
+                        constraints.append({
+                            'cells': unknown, 
+                            'remaining': remaining_mines_here
+                        })
         
-        if probs:
-            constraints.append({'cells': list(probs.keys()), 'remaining': remaining_mines})
+        # PRE-PROCESSING: Apply trivial constraints
+        changed = True
+        max_preprocess_rounds = 10
+        for round_num in range(max_preprocess_rounds):
+            if not changed:
+                break
+            changed = False
+            
+            for con in constraints:
+                cells = con['cells']
+                rem = con['remaining']
+                
+                # Only process unlocked cells (virtual flags not in this list anymore)
+                unlocked_cells = [c for c in cells if c in probs and not probs[c].get('locked', False)]
+                
+                if not unlocked_cells:
+                    continue
+                
+                eps = 1e-9
+                
+                # If remaining == number of unlocked cells, all must be mines
+                if abs(rem - len(unlocked_cells)) < eps:
+                    for cell in unlocked_cells:
+                        if probs[cell]['p'] < 1.0 - eps:
+                            probs[cell] = {'p': 1.0, 'q': 0.0, 'locked': False}
+                            changed = True
+                
+                # If remaining == 0, all must be safe
+                elif rem < eps and rem > -eps:
+                    for cell in unlocked_cells:
+                        if probs[cell]['p'] > eps:
+                            probs[cell] = {'p': 0.0, 'q': 1.0, 'locked': False}
+                            changed = True
+        
+        # Global constraint only on non-locked cells
+        non_locked_cells = [c for c in probs.keys() if not probs[c].get('locked', False)]
+        if non_locked_cells and remaining_mines >= 0:
+            constraints.append({'cells': non_locked_cells, 'remaining': remaining_mines})
         
         if not constraints:
+            self._cached_probs = probs
             return probs
         
+        # Iterative solving
         max_iter, threshold = 100, 0.01
-        for _ in range(max_iter):
+        for iteration in range(max_iter):
             max_change = 0
+            
             for con in constraints:
                 cells, rem = con['cells'], con['remaining']
-                valid_cells = [cell for cell in cells if cell in probs]
-                if not valid_cells: continue
+                valid_cells = [cell for cell in cells if cell in probs and not probs[cell].get('locked', False)]
+                if not valid_cells: 
+                    continue
+                
                 sum_p = sum(probs[cell]['p'] for cell in valid_cells)
                 sum_q = sum(probs[cell]['q'] for cell in valid_cells)
+                
                 if sum_p > 1e-10:
                     factor_p = rem / sum_p
                     for cell in valid_cells:
                         old = probs[cell]['p']
                         probs[cell]['p'] *= factor_p
                         max_change = max(max_change, abs(probs[cell]['p'] - old))
+                
                 if sum_q > 1e-10:
                     factor_q = (len(valid_cells) - rem) / sum_q
                     for cell in valid_cells:
@@ -476,7 +460,10 @@ class Minesweeper:
                         probs[cell]['q'] *= factor_q
                         max_change = max(max_change, abs(probs[cell]['q'] - old))
             
+            # Normalize
             for cell in probs:
+                if probs[cell].get('locked', False):
+                    continue
                 p_val, q_val = probs[cell]['p'], probs[cell]['q']
                 total = p_val + q_val
                 if total > 1e-10:
@@ -484,101 +471,166 @@ class Minesweeper:
                     max_change = max(max_change, abs(new_p - p_val), abs(new_q - q_val))
                     probs[cell]['p'], probs[cell]['q'] = new_p, new_q
             
-            if max_change < threshold: break
+            if max_change < threshold: 
+                break
         
+        # After convergence, detect NEW virtual flags
+        VIRTUAL_FLAG_THRESHOLD = 0.999
+        new_virtual_flags = []
+        for (r, c), vals in probs.items():
+            if not vals.get('locked', False) and vals['p'] >= VIRTUAL_FLAG_THRESHOLD:
+                new_virtual_flags.append((r, c))
+        
+        # If we found new virtual flags, add them and RE-ITERATE
+        if new_virtual_flags:
+            for cell in new_virtual_flags:
+                self.virtual_flags.add(cell)
+                if cell in probs:
+                    probs[cell] = {'p': 1.0, 'q': 0.0, 'locked': True}
+            
+            self._cached_probs = probs
+            return self._get_current_probabilities()
+        
+        # Cache for next call
+        self._cached_probs = probs
         return probs
-
-    def update_probabilities_only(self):
-        """Fast probability update for display purposes."""
-        probs = self._get_current_probabilities()
-        self.display_probabilities(probs)
-
-    def will_flag_help(self, r, c):
-        # ... (This method remains unchanged)
-        nbrs = self._get_neighbors(r, c)
-        for nr, nc in nbrs:
-            if not self.grid[nr][nc]['revealed'] or self.grid[nr][nc]['mine']:
-                continue
-            neighbor_nbrs = self._get_neighbors(nr, nc)
-            unknown_count, flagged_count = 0, 0
-            for nnr, nnc in neighbor_nbrs:
-                if self.grid[nnr][nnc]['flagged']: flagged_count += 1
-                elif not self.grid[nnr][nnc]['revealed']: unknown_count += 1
-            remaining_mines = self.grid[nr][nc]['count'] - flagged_count
-            if remaining_mines == 1 and unknown_count > 1:
-                return True
-        return False
 
     def solve_minesweeper_entropy(self):
         if self.game_over:
             return
 
-        # Priority 1: If there are moves in the queue, execute the next one.
-        if self.move_queue:
-            action, (r, c), prob = self.move_queue.pop(0)
-
-            is_valid_move = (action == 'reveal' and not self.grid[r][c]['revealed']) or \
-                            (action == 'flag' and not self.grid[r][c]['revealed'] and not self.grid[r][c]['flagged'])
-
-            if is_valid_move:
-                self.last_move_prob = prob
-                self.last_move_entropy = min(prob, 1 - prob)
-                if action == 'reveal':
-                    self._reveal(r, c)
-                elif action == 'flag':
-                    self._flag(r, c)
-        
-        # Priority 2: If the queue is empty, calculate probabilities and repopulate it.
-        else:
-            probs = self._get_current_probabilities()
-            self.display_probabilities(probs)
-
-            # --- Step A: Use STRICT thresholds to separate CERTAINTY from GUESSING ---
-            # This is the most critical change to fix the bug.
-            certain_safe_cells = []
-            certain_mine_cells = []
-            uncertain_cells = []  # This will store (probability, (r, c)) for true guesses
-
-            # Use tight floating-point-safe thresholds for absolute certainty.
-            CERTAIN_SAFE_THRESHOLD = THRESHOLD
-            CERTAIN_MINE_THRESHOLD = 1 - THRESHOLD
-
-            for (r, c), vals in probs.items():
-                prob = vals['p']
-                # Partition into three MUTUALLY EXCLUSIVE categories.
-                if prob < CERTAIN_SAFE_THRESHOLD:
-                    certain_safe_cells.append(((r, c), prob))
-                elif prob > CERTAIN_MINE_THRESHOLD:
-                    certain_mine_cells.append(((r, c), prob))
-                else:  # Any cell that is not 100% safe or 100% a mine is a guess.
-                    uncertain_cells.append((prob, (r, c)))
-
-            # --- Step B: Populate the queue based on the user's desired hierarchy ---
-            # SAFE -> GUESS -> FLAG
-            
-            # 1. If there are CERTAINLY SAFE cells, queue them all for revealing.
-            if certain_safe_cells:
-                self.move_queue = [('reveal', coords, prob) for coords, prob in certain_safe_cells]
-
-            # 2. If NO certain safe cells, find the best GUESS from the UNCERTAIN list.
-            elif uncertain_cells:
-                # Find the best guess (lowest probability) from the uncertain list.
-                prob, coords = min(uncertain_cells)
-                # Queue only the single best guess. The board state will change, requiring recalculation.
-                self.move_queue.append(('reveal', coords, prob))
-
-            # 3. If NO certain safe cells and NO uncertain cells to guess on,
-            #    the only remaining option is to flag CERTAIN MINES.
-            elif certain_mine_cells:
-                # This provides the solver with more info for the next cycle without risk.
-                self.move_queue = [('flag', coords, prob) for coords, prob in certain_mine_cells]
-
-            # Immediately process the first move from the newly populated queue.
+        try:
+            # Priority 1: If there are moves in the queue, execute the next one.
             if self.move_queue:
-                self.solve_minesweeper_entropy()
-                return
+                action, (r, c), prob = self.move_queue.pop(0)
 
-        # Schedule the next solver cycle.
+                if action == 'reveal' and not self.grid[r][c]['revealed'] and not self.grid[r][c]['flagged']:
+                    # SAVE GAME STATE BEFORE REVEALING (for potential loss)
+                    if self.grid[r][c]['mine']:
+                        grid_copy = copy.deepcopy(self.grid)
+                        # Use the CACHED probabilities from when we made the decision
+                        if hasattr(self, '_last_calculated_probs'):
+                            self.pre_lethal_state_and_probs = {
+                                "grid": grid_copy,
+                                "probs": self._last_calculated_probs,
+                            }
+                    
+                    self.last_move_prob = prob
+                    self.last_move_entropy = min(prob, 1 - prob)
+                    self._reveal(r, c)
+                    
+                    # CRITICAL: After revealing, check if global mine density changed significantly
+                    if not self.game_over and hasattr(self, '_queue_global_density'):
+                        # Calculate current global density
+                        total_virtual_flags = len(self.virtual_flags)
+                        remaining_mines = self.initial_mines - self.actual_flags - total_virtual_flags
+                        
+                        # Count unrevealed non-virtual cells
+                        unrevealed_count = 0
+                        for r in range(self.rows):
+                            for c in range(self.cols):
+                                if not self.grid[r][c]['revealed'] and not self.grid[r][c]['flagged'] and (r, c) not in self.virtual_flags:
+                                    unrevealed_count += 1
+                        
+                        current_density = remaining_mines / unrevealed_count if unrevealed_count > 0 else 0
+                        
+                        # If density increased significantly, recalculate
+                        if current_density > self._queue_global_density * 1.1:  # 10% increase
+                            # print(f"DEBUG: Global density increased from {self._queue_global_density:.4f} to {current_density:.4f}, clearing queue", flush=True)
+                            self.move_queue.clear()
+                            if hasattr(self, '_queue_global_density'):
+                                delattr(self, '_queue_global_density')
+            
+            # Priority 2: If the queue is empty, calculate probabilities and repopulate it.
+            else:
+                if self.spanning_area == 0:
+                    self.last_move_prob = self.initial_mines / (self.rows * self.cols)
+                    self.last_move_entropy = min(self.last_move_prob, 1 - self.last_move_prob)
+                    self._reveal(0, 0)
+                else:
+                    old_virtual_count = len(self.virtual_flags)
+                    
+                    probs = self._get_current_probabilities()
+                    
+                    # CACHE the probabilities for potential loss state saving
+                    self._last_calculated_probs = probs.copy() if probs else {}
+                    
+                    if len(self.virtual_flags) > old_virtual_count:
+                        self.move_queue.clear()
+                        if hasattr(self, '_queue_global_density'):
+                            delattr(self, '_queue_global_density')
+                        if not self.game_over:
+                            self.master.after(10, self.solve_minesweeper_entropy)
+                        return
+                                    
+                    if not probs:
+                        if not self.game_over:
+                            print(f"WARNING: No probabilities calculated, but game not over. Forcing loss.", flush=True)
+                            self.game_over = True
+                        return
+                    
+                    self.display_probabilities(probs)
+
+                    # Calculate global mine density
+                    total_virtual_flags = len(self.virtual_flags)
+                    remaining_mines = self.initial_mines - self.actual_flags - total_virtual_flags
+                    
+                    unrevealed_count = 0
+                    for r in range(self.rows):
+                        for c in range(self.cols):
+                            if not self.grid[r][c]['revealed'] and not self.grid[r][c]['flagged'] and (r, c) not in self.virtual_flags:
+                                unrevealed_count += 1
+                    
+                    global_density = remaining_mines / unrevealed_count if unrevealed_count > 0 else 0
+                    
+                    certain_safe_cells = []
+                    uncertain_cells = []
+
+                    CERTAIN_SAFE_THRESHOLD = THRESHOLD
+
+                    for (r, c), vals in probs.items():
+                        prob = vals['p']
+                        
+                        if (r, c) in self.virtual_flags:
+                            continue
+                        
+                        if prob < CERTAIN_SAFE_THRESHOLD:
+                            certain_safe_cells.append(((r, c), prob))
+                        elif prob < 0.96:
+                            uncertain_cells.append((prob, (r, c)))
+
+                    # SIMPLIFIED BATCHING: Queue all safe cells (prob < THRESHOLD)
+                    # The density check will protect us from stale probabilities
+                    if certain_safe_cells:
+                        self.move_queue = [('reveal', coords, prob) for coords, prob in certain_safe_cells]
+                        self._queue_global_density = global_density
+                        # print(f"DEBUG: Batching {len(certain_safe_cells)} moves with prob < {CERTAIN_SAFE_THRESHOLD:.4f} (global density: {global_density:.4f})", flush=True)
+                            
+                    elif uncertain_cells:
+                        prob, coords = min(uncertain_cells)
+                        self.move_queue.append(('reveal', coords, prob))
+                        if hasattr(self, '_queue_global_density'):
+                            delattr(self, '_queue_global_density')
+                    else:
+                        if not self.game_over:
+                            if self.non_mines == 0:
+                                self._check_win()
+                            else:
+                                self.game_over = True
+                        return
+
+                    if self.move_queue:
+                        self.solve_minesweeper_entropy()
+                        return
+
+        except Exception as e:
+            print(f"ERROR in solve_minesweeper_entropy: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+            if not self.game_over:
+                self.game_over = True
+            return
+
         if not self.game_over:
             self.master.after(10, self.solve_minesweeper_entropy)
 
@@ -598,15 +650,20 @@ class Minesweeper:
         self.non_mines = self.rows * self.cols - self.initial_mines
         self.spanning_area = 0
         self.actual_flags = 0
-        self.queued_safe = []
-        self.queued_mines = []
-        self.start_time = None
+        self.virtual_flags = set()
+        self.start_time = None  # Will be reset in _init_game
         self.last_move_prob = None
         self.last_move_entropy = None
         self.clicked_mine = None
         self.move_queue = []
         self.pre_lethal_state_and_probs = None
         self.last_saved_file = None
+        if hasattr(self, '_cached_probs'):
+            delattr(self, '_cached_probs')
+        if hasattr(self, '_restart_scheduled'):
+            delattr(self, '_restart_scheduled')
+        if hasattr(self, '_loss_processed'):
+            delattr(self, '_loss_processed')
         for widget in self.master.winfo_children():
             widget.destroy()
         self._init_game()
@@ -620,44 +677,45 @@ class Minesweeper:
         for (r, c), vals in probs.items():
             prob = vals['p']
             if not self.grid[r][c]['revealed'] and not self.grid[r][c]['flagged']:
-                if prob < THRESHOLD: color = '#5b8c5a'
-                elif prob > 1 - THRESHOLD: color = '#ff6361'
-                else: color = 'white'
+                if prob < THRESHOLD: 
+                    color = '#5b8c5a'
+                elif prob > 1 - THRESHOLD: 
+                    color = '#ff6361'
+                else: 
+                    color = 'white'
                 self.buttons[r][c].config(
                     text=f'{prob:.1f}', fg=color, font=('Arial', 10, 'bold'), width=2, height=1
                 )
 
     def log_game_result(self, outcome):
-            log_file = "minesweeper_log.csv"
-            file_exists = os.path.isfile(log_file)
+        log_file = "minesweeper_log.csv"
+        file_exists = os.path.isfile(log_file)
+        
+        game_duration = time.time() - self.start_time if self.start_time else 0
+        
+        with open(log_file, mode='a', newline='') as file:
+            writer = csv.writer(file)
+            if not file_exists:
+                writer.writerow(["Outcome", "Spanning Area", "Rows", "Cols", "Mines", 
+                            "Flags Placed", "Mode", "Duration (s)", "Last Move Prob", 
+                            "Last Move Entropy", "Game Seed", "State File"])
             
-            game_duration = time.time() - self.start_time if self.start_time else 0
+            mode = "Assist" if self.assist_mode else "Auto"
             
-            with open(log_file, mode='a', newline='') as file:
-                writer = csv.writer(file)
-                if not file_exists:
-                    # Add the new headers
-                    writer.writerow(["Outcome", "Spanning Area", "Rows", "Cols", "Mines", 
-                                "Flags Placed", "Mode", "Duration (s)", "Last Move Prob", 
-                                "Last Move Entropy", "Game Seed", "State File"])
-                
-                mode = "Assist" if self.assist_mode else "Auto"
-                
-                # Add the new data points to the row
-                writer.writerow([
-                    outcome, 
-                    self.spanning_area, 
-                    self.rows, 
-                    self.cols, 
-                    self.initial_mines, 
-                    self.actual_flags, 
-                    mode,
-                    f"{game_duration:.2f}",
-                    f"{self.last_move_prob:.4f}" if self.last_move_prob is not None else "N/A",
-                    f"{self.last_move_entropy:.4f}" if self.last_move_entropy is not None else "N/A",
-                    self.current_seed,
-                    self.last_saved_file if self.last_saved_file else "N/A"
-                ])
+            writer.writerow([
+                outcome, 
+                self.spanning_area, 
+                self.rows, 
+                self.cols, 
+                self.initial_mines, 
+                self.actual_flags, 
+                mode,
+                f"{game_duration:.2f}",
+                f"{self.last_move_prob:.4f}" if self.last_move_prob is not None else "N/A",
+                f"{self.last_move_entropy:.4f}" if self.last_move_entropy is not None else "N/A",
+                self.current_seed,
+                self.last_saved_file if self.last_saved_file else "N/A"
+            ])
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Minesweeper Solver')
@@ -673,8 +731,6 @@ if __name__ == '__main__':
                        help='Specific game seed to use (overrides -n and --seed)')
     
     args = parser.parse_args()
-    
-    current_seed_for_game = None
 
     if args.game_seed is not None:
         random.seed(args.game_seed)
@@ -685,7 +741,11 @@ if __name__ == '__main__':
     else:
         random.seed(args.seed)
         if args.num_games:
-            game_seeds = [random.randint(0, 2**31 - 1) for _ in range(args.num_games)]
+            # Generate 1.5x seeds as buffer
+            cache_size = int(args.num_games * 1.5)
+            game_seeds = [random.randint(0, 2**31 - 1) for _ in range(cache_size)]
+            print(f"Auto mode: Playing {args.num_games} games with master seed {args.seed}")
+            print(f"  Generated {cache_size} seed cache (1.5x buffer)")
         else:
             game_seeds = None
         num_games = args.num_games
@@ -724,35 +784,63 @@ if __name__ == '__main__':
             print(f"Auto mode: Playing games with master seed {args.seed}")
         
         def check_time():
-            global current_seed_for_game
             if game.game_over:
+                # Add a small delay to ensure all UI updates are complete
+                if hasattr(game, '_restart_scheduled'):
+                    # Already scheduled, but still need to keep checking
+                    root.after(100, check_time)
+                    return
+                
+                game._restart_scheduled = True
+                
+                # Increment total game counter
+                current_game_index[0] += 1
+                
+                # Only print and count games with spanning_area > 1
                 if game.spanning_area > 1:
                     games_played[0] += 1
                     
+                    # Print game result
                     if "You win!" in root.title():
-                        print(f"Game {games_played[0]}: Win! Spanning area: {game.spanning_area}")
+                        print(f"Game {games_played[0]}: Win! Spanning area: {game.spanning_area}", flush=True)
                     else:
-                        print(f"Game {games_played[0]}: Loss. Spanning area: {game.spanning_area}")
+                        print(f"Game {games_played[0]}: Loss. Spanning area: {game.spanning_area}", flush=True)
                     
+                    # Check if we should exit
                     if args.game_seed is not None or (num_games and games_played[0] >= num_games):
-                        print(f"\nCompleted {games_played[0]} valid game(s). Exiting.")
+                        print(f"\nCompleted {games_played[0]} valid game(s) out of {current_game_index[0]} total games. Exiting.", flush=True)
                         root.destroy()
                         return
-
-                current_game_index[0] += 1
+                
+                # Get next seed for the next game
                 if game_seeds and current_game_index[0] < len(game_seeds):
-                    current_seed_for_game = game_seeds[current_game_index[0]]
-                    random.seed(current_seed_for_game)
-                    print(f"Starting game {current_game_index[0] + 1} with seed {current_seed_for_game}")
+                    new_seed = game_seeds[current_game_index[0]]
+                    random.seed(new_seed)
+                    game.current_seed = new_seed
                 elif not game_seeds and not args.game_seed:
-                    current_seed_for_game = random.randint(0, 2**31 - 1)
-                    random.seed(current_seed_for_game)
-                    print(f"Starting next game with new seed {current_seed_for_game}")
+                    new_seed = random.randint(0, 2**31 - 1)
+                    random.seed(new_seed)
+                    game.current_seed = new_seed
 
-                game.restart_game()
-                game.current_seed = current_seed_for_game
-            
-            root.after(100, check_time)
+                # Schedule restart after a small delay
+                def do_restart():
+                    game.restart_game()
+                    # Schedule check_time to resume after restart
+                    root.after(100, check_time)
+                
+                root.after(50, do_restart)
+                return  # Don't schedule check_time here - do_restart will handle it
+            else:
+                # Game is still running - check for timeout
+                if hasattr(game, 'start_time') and game.start_time:
+                    elapsed = time.time() - game.start_time
+                    if elapsed > 300:  # 5 minute timeout
+                        print(f"WARNING: Game timeout after {elapsed:.1f}s. Forcing loss.", flush=True)
+                        game.game_over = True
+                        # Will be handled on next check_time call
+                
+                # Continue checking
+                root.after(100, check_time)
         
         root.after(30, game.solve_minesweeper_entropy)
         root.after(100, check_time)
