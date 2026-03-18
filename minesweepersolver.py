@@ -30,7 +30,6 @@ class Minesweeper:
         self.flag_emoji = "\u2691"
         self.mine_emoji = "\U0001F4A3"
         self.spanning_area = 0
-        self.label = label
         self.actual_flags = 0
         self.queued_safe = []
         self.queued_mines = []
