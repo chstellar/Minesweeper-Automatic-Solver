@@ -18,7 +18,7 @@ The solver plays in **automatic mode** by default, where users can provide the `
 
 By default, it initiates an Expert game (16×30 with 99 mines), while the exact settings can be tuned using `-r/--rows` for the number of rows, `-c/--cols` for the number of columns, and `-m/--mines` for the number of mines. 
 
-One can specify a master seed with `--seed` to initialize a series of new games, or specify a specific game seed with `--game-seed` when playing a single game. Game statistics are recorded in `minesweeper_log.csv`.
+One can specify a master seed with `-s/--seed` to initialize a series of new games, or specify a specific game seed with `-g/--game-seed` when playing a single game. Game statistics are recorded in `minesweeper_log.csv`.
 
 ### Examples
 

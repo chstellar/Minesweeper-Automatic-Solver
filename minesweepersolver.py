@@ -842,7 +842,7 @@ if __name__ == '__main__':
                 # Continue checking
                 root.after(100, check_time)
         
-        root.after(10000, game.solve_minesweeper_entropy)
+        root.after(50, game.solve_minesweeper_entropy)
         root.after(100, check_time)
     
     root.mainloop()
