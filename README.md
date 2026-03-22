@@ -6,9 +6,8 @@ Minesweeper automatic solver by iterative scaling with GUI visualization built i
 ## Features
 
 - Iterative constraint propagation for mine probability estimation
-- Strategic solver that prioritises certain moves over probabilistic ones
+- Strategic solver that prioritises the most certain move
 - Real-time probability visualisation on interactive board
-- Automated game logging (outcomes, coverage stats) to CSV
 
 ## Usage
 
