@@ -726,8 +726,8 @@ if __name__ == '__main__':
     parser.add_argument('-r', '--rows', type=int, default=16, help='Number of rows (default: 16)')
     parser.add_argument('-c', '--cols', type=int, default=30, help='Number of columns (default: 30)')
     parser.add_argument('-m', '--mines', type=int, default=99, help='Number of mines (default: 99)')
-    parser.add_argument('--seed', type=int, default=MASTER_SEED, help=f'Master random seed (default: {MASTER_SEED})')
-    parser.add_argument('--game-seed', type=int, default=None, 
+    parser.add_argument('-s', '--seed', type=int, default=MASTER_SEED, help=f'Master random seed (default: {MASTER_SEED})')
+    parser.add_argument('-g', '--game-seed', type=int, default=None, 
                        help='Specific game seed to use (overrides -n and --seed)')
     
     args = parser.parse_args()
@@ -842,7 +842,7 @@ if __name__ == '__main__':
                 # Continue checking
                 root.after(100, check_time)
         
-        root.after(30, game.solve_minesweeper_entropy)
+        root.after(10000, game.solve_minesweeper_entropy)
         root.after(100, check_time)
     
     root.mainloop()

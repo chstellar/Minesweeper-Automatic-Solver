@@ -1,6 +1,8 @@
 # Minesweeper-Automatic-Solver
 Minesweeper automatic solver by iterative scaling with GUI visualization built in Python using Tkinter.
 
+![Demo](demo.gif)
+
 ## Features
 
 - Iterative constraint propagation for mine probability estimation
